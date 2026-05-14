@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Prostate Wars — E. faecalis vs Fosfomycin</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111; color: #ccc; font-family: sans-serif; padding: 16px; }
+    h1 { font-size: 15px; font-weight: 500; color: #e0a080; margin-bottom: 8px; letter-spacing: 0.03em; }
+    canvas { display: block; width: 100%; cursor: crosshair; border-radius: 6px; }
+    .hud { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: #aaa; padding: 8px 0 0; align-items: center; }
+    .hud span { display: flex; align-items: center; gap: 5px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .sq { width: 10px; height: 7px; border-radius: 2px; display: inline-block; }
+    button {
+      font-size: 12px; padding: 4px 12px; cursor: pointer;
+      background: transparent; border: 1px solid #555; color: #ccc;
+      border-radius: 4px;
+    }
+    button:hover { background: #222; }
+    #score { font-size: 13px; font-weight: 500; color: #e0e0e0; }
+    .note { font-size: 11px; color: #666; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<h1>The Prostate Wars — Click to fire Fosfomycin. "Send wave" to spawn reinforcements (because that's what biofilm does).</h1>
+<canvas id="c" height="500"></canvas>
+<div class="hud">
+  <span><span class="dot" style="background:#c0392b"></span> E. faecalis (the boss, 4HP)</span>
+  <span><span class="sq" style="background:#27ae60"></span> E. coli (flankers)</span>
+  <span><span class="sq" style="background:#8e44ad"></span> E. hormaechei (snipers)</span>
+  <span><span class="dot" style="background:#16a085"></span> Fosfomycin — click to fire</span>
+  <span id="score">Kills: 0</span>
+  <button onclick="spawnWave()">Send wave</button>
+</div>
+<p class="note">Based on real PCR results: MicrogenDX semen sample, March 2026. E. faecalis 80%, E. hormaechei 13%, E. coli 6%. Resistance: ermB, tetM, qnr, CTX-M. Treatment: 12-week Fosfomycin course.</p>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = Math.min(window.innerWidth - 32, 900);
+canvas.height = 500;
+const W = canvas.width, H = canvas.height;
+
+let kills = 0;
+let particles = [];
+let fosfos = [];
+let microbes = [];
+let explosions = [];
+let speechBubbles = [];
+let t = 0;
+
+const FAECALIS_QUOTES = ["I AM INEVITABLE", "YOU CANNOT KILL ME", "20 YEARS BABY", "BIOFILM GO BRRR", "TRY CIPRO AGAIN I DARE YOU", "ERMB ACTIVATED", "RESISTANCE IS FUTILE... FOR YOU", "I LIVE IN TISSUE NOW BYE"];
+const ECOLI_QUOTES = ["just following orders", "technically not my fault", "ctxm go zoom", "flanking!", "wait which side am I on"];
+const EHOR_QUOTES = ["you found me?!", "statistically impossible", "matched resistance genes lol", "rare but deadly", "angie has me too hehe"];
+const FOSFO_QUOTES = ["MurA target acquired", "cell wall incoming", "THIS IS FOR CHRISTOPHER", "enzyme blocked!", "die scum"];
+const DEATH_QUOTES = ["NOOOOO", "not like this", "the biofilm...", "avenge me", "fosfomycin OP"];
+
+function rand(a, b) { return a + Math.random() * (b - a); }
+function randInt(a, b) { return Math.floor(rand(a, b)); }
+function choice(arr) { return arr[randInt(0, arr.length)]; }
+
+class Microbe {
+  constructor(type) {
+    this.type = type;
+    this.dead = false;
+    this.hp = type === 'efaecalis' ? 4 : 2;
+    this.maxHp = this.hp;
+    this.phase = rand(0, Math.PI * 2);
+    this.hitFlash = 0;
+    this.speechTimer = 0;
+    this.speech = '';
+    this.wobble = 0;
+
+    if (type === 'efaecalis') {
+      this.x = rand(W * 0.35, W * 0.68);
+      this.y = rand(H * 0.25, H * 0.75);
+      this.r = rand(14, 20);
+      this.vx = rand(-0.4, 0.4);
+      this.vy = rand(-0.3, 0.3);
+    } else if (type === 'ecoli') {
+      this.x = rand(W * 0.3, W * 0.75);
+      this.y = rand(H * 0.2, H * 0.8);
+      this.len = rand(22, 34);
+      this.rad = rand(6, 9);
+      this.rot = rand(0, Math.PI * 2);
+      this.vrot = rand(-0.015, 0.015);
+      this.vx = rand(-0.6, 0.6);
+      this.vy = rand(-0.5, 0.5);
+    } else {
+      this.x = rand(W * 0.28, W * 0.78);
+      this.y = rand(H * 0.2, H * 0.8);
+      this.len = rand(28, 40);
+      this.rad = rand(5, 8);
+      this.rot = rand(0, Math.PI * 2);
+      this.vrot = rand(-0.008, 0.008);
+      this.vx = rand(-0.45, 0.45);
+      this.vy = rand(-0.35, 0.35);
+    }
+
+    if (Math.random() < 0.3) {
+      this.speechTimer = randInt(60, 200);
+      this.speech = choice(type === 'efaecalis' ? FAECALIS_QUOTES : type === 'ecoli' ? ECOLI_QUOTES : EHOR_QUOTES);
+    }
+  }
+
+  update() {
+    this.x += this.vx + 0.3 * Math.sin(t * 0.025 + this.phase);
+    this.y += this.vy + 0.2 * Math.cos(t * 0.022 + this.phase + 1);
+    if (this.rot !== undefined) this.rot += this.vrot;
+    if (this.x < 60) { this.vx = Math.abs(this.vx); this.x = 60; }
+    if (this.x > W - 60) { this.vx = -Math.abs(this.vx); this.x = W - 60; }
+    if (this.y < 40) { this.vy = Math.abs(this.vy); this.y = 40; }
+    if (this.y > H - 40) { this.vy = -Math.abs(this.vy); this.y = H - 40; }
+    if (this.hitFlash > 0) this.hitFlash--;
+    if (this.wobble > 0) this.wobble -= 0.15;
+    if (this.speechTimer > 0) this.speechTimer--;
+    if (Math.random() < 0.003) {
+      this.speech = choice(this.type === 'efaecalis' ? FAECALIS_QUOTES : this.type === 'ecoli' ? ECOLI_QUOTES : EHOR_QUOTES);
+      this.speechTimer = 120;
+    }
+  }
+
+  hit() {
+    this.hp--;
+    this.hitFlash = 12;
+    this.wobble = 8;
+    this.vx += rand(-2, 2);
+    this.vy += rand(-2, 2);
+    speechBubbles.push({ x: this.x, y: this.y - 30, text: choice(this.hp <= 0 ? DEATH_QUOTES : ['ow!', 'rude!', 'MurA!', 'nooo', 'blocked!']), life: 60, color: '#c0392b' });
+    if (this.hp <= 0) {
+      this.dead = true;
+      kills++;
+      document.getElementById('score').textContent = 'Kills: ' + kills;
+      for (let i = 0; i < 18; i++) {
+        explosions.push({
+          x: this.x, y: this.y,
+          vx: rand(-4, 4), vy: rand(-4, 4),
+          life: randInt(20, 50), r: rand(2, 6),
+          color: this.type === 'efaecalis' ? '#e74c3c' : this.type === 'ecoli' ? '#27ae60' : '#8e44ad'
+        });
+      }
+    }
+  }
+
+  contains(px, py) {
+    if (this.type === 'efaecalis') {
+      return (px - this.x) ** 2 + (py - this.y) ** 2 < this.r ** 2;
+    }
+    const cos = Math.cos(-this.rot), sin = Math.sin(-this.rot);
+    const lx = cos * (px - this.x) - sin * (py - this.y);
+    const ly = sin * (px - this.x) + cos * (py - this.y);
+    return Math.abs(lx) < this.len / 2 + 4 && Math.abs(ly) < this.rad + 4;
+  }
+
+  draw() {
+    ctx.save();
+    if (this.hitFlash > 0 && this.hitFlash % 3 < 2) ctx.filter = 'brightness(2.5)';
+    const wobX = this.wobble * Math.sin(t * 0.4) * 0.5;
+
+    if (this.type === 'efaecalis') {
+      drawSphere3D(ctx, this.x + wobX, this.y, this.r, '#c0392b', '#922b21', 'rgba(255,150,130,0.6)');
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(8, this.r * 0.55)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Ef', this.x + wobX, this.y + 1);
+      drawHelmet(ctx, this.x + wobX, this.y - this.r, this.r, '#8B0000');
+      drawHealthBar(ctx, this.x + wobX, this.y - this.r - 18, this.hp / this.maxHp, 30, '#c0392b');
+    } else if (this.type === 'ecoli') {
+      ctx.translate(this.x + wobX, this.y);
+      ctx.rotate(this.rot);
+      drawRod3D(ctx, 0, 0, this.len, this.rad, '#27ae60', '#1e8449');
+      ctx.font = '7px sans-serif';
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Ec', 0, 0);
+      ctx.setTransform(1,0,0,1,0,0);
+      drawTinyFlag(ctx, this.x + wobX, this.y - this.rad - 10, '#27ae60');
+      drawHealthBar(ctx, this.x + wobX, this.y - this.rad - 20, this.hp / this.maxHp, 24, '#27ae60');
+    } else {
+      ctx.translate(this.x + wobX, this.y);
+      ctx.rotate(this.rot);
+      drawRod3D(ctx, 0, 0, this.len, this.rad, '#8e44ad', '#6c3483');
+      ctx.font = '7px sans-serif';
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Eh', 0, 0);
+      ctx.setTransform(1,0,0,1,0,0);
+      drawTinyFlag(ctx, this.x + wobX, this.y - this.rad - 10, '#8e44ad');
+      drawHealthBar(ctx, this.x + wobX, this.y - this.rad - 20, this.hp / this.maxHp, 28, '#8e44ad');
+    }
+    ctx.restore();
+
+    if (this.speechTimer > 0 && this.speech) {
+      drawSpeechBubble(ctx, this.x, this.type === 'efaecalis' ? this.y - this.r - 10 : this.y - this.rad - 14, this.speech, this.speechTimer);
+    }
+  }
+}
+
+function drawSphere3D(ctx, cx, cy, r, base, shade, highlight) {
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = base; ctx.fill();
+  ctx.strokeStyle = shade; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx - r*0.3, cy - r*0.32, r*0.35, 0, Math.PI*2);
+  ctx.fillStyle = highlight; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + r*0.2, cy + r*0.2, r*0.5, 0, Math.PI*2);
+  ctx.fillStyle = shade; ctx.globalAlpha = 0.3; ctx.fill(); ctx.globalAlpha = 1;
+}
+
+function drawRod3D(ctx, cx, cy, len, rad, base, shade) {
+  ctx.beginPath();
+  if (ctx.roundRect) {
+    ctx.roundRect(cx - len/2, cy - rad, len, rad*2, rad);
+  } else {
+    ctx.arc(cx - len/2 + rad, cy, rad, Math.PI/2, -Math.PI/2, true);
+    ctx.lineTo(cx + len/2 - rad, cy - rad);
+    ctx.arc(cx + len/2 - rad, cy, rad, -Math.PI/2, Math.PI/2);
+    ctx.closePath();
+  }
+  ctx.fillStyle = base; ctx.fill();
+  ctx.strokeStyle = shade; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(cx - len/2 + rad, cy - rad*0.3, rad*0.5, rad*0.38, 0, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.fill();
+}
+
+function drawHelmet(ctx, cx, cy, r, color) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.ellipse(cx, cy + 3, r*0.8, r*0.5, 0, Math.PI, 0, true); ctx.fill();
+  ctx.beginPath(); ctx.rect(cx - r*0.85, cy + 2, r*1.7, 3);
+  ctx.fillStyle = '#600'; ctx.fill();
+  ctx.restore();
+}
+
+function drawTinyFlag(ctx, x, y, color) {
+  ctx.save();
+  ctx.strokeStyle = '#888'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 10); ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.moveTo(x, y-10); ctx.lineTo(x+8, y-7); ctx.lineTo(x, y-4); ctx.fill();
+  ctx.restore();
+}
+
+function drawHealthBar(ctx, cx, cy, pct, w, color) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(cx - w/2, cy, w, 5);
+  ctx.fillStyle = color; ctx.fillRect(cx - w/2, cy, w * pct, 5);
+  ctx.restore();
+}
+
+function drawSpeechBubble(ctx, x, y, text, life) {
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, life / 30);
+  ctx.font = '10px sans-serif';
+  const tw = ctx.measureText(text).width;
+  const bw = tw + 12, bh = 16;
+  const bx = Math.max(4, Math.min(W - bw - 4, x - bw/2));
+  const by = Math.max(4, y - bh - 4);
+  ctx.fillStyle = '#fffbe6'; ctx.strokeStyle = '#aaa'; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 4); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, bx + 6, by + bh/2);
+  ctx.restore();
+}
+
+class Fosfo {
+  constructor(tx, ty) {
+    this.x = rand(20, 80);
+    this.y = rand(H * 0.1, H * 0.9);
+    const dx = tx - this.x, dy = ty - this.y;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    const spd = rand(6, 10);
+    this.vx = (dx/dist)*spd; this.vy = (dy/dist)*spd;
+    this.r = 6; this.trail = [];
+    this.speech = choice(FOSFO_QUOTES); this.speechTimer = 80;
+  }
+  update() {
+    this.trail.push({x: this.x, y: this.y});
+    if (this.trail.length > 10) this.trail.shift();
+    this.x += this.vx; this.y += this.vy;
+    if (this.speechTimer > 0) this.speechTimer--;
+  }
+  draw() {
+    for (let i = 0; i < this.trail.length; i++) {
+      const a = (i / this.trail.length) * 0.4;
+      ctx.beginPath(); ctx.arc(this.trail[i].x, this.trail[i].y, 3*(i/this.trail.length), 0, Math.PI*2);
+      ctx.fillStyle = `rgba(22,160,133,${a})`; ctx.fill();
+    }
+    drawSphere3D(ctx, this.x, this.y, this.r, '#16a085', '#0d6e5a', 'rgba(100,255,200,0.6)');
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 7px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('F', this.x, this.y);
+    if (this.speechTimer > 0) drawSpeechBubble(ctx, this.x, this.y - 14, this.speech, this.speechTimer);
+  }
+  isOut() { return this.x > W+20 || this.y < -20 || this.y > H+20; }
+}
+
+function drawBackground() {
+  ctx.fillStyle = '#1a0a0a'; ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 60; i++) {
+    const px = (i*137+50)%W, py = (i*93+30)%H;
+    ctx.beginPath(); ctx.arc(px, py, 1, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,200,150,${0.05+(i%3)*0.04})`; ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(180,80,40,0.15)'; ctx.lineWidth = 60;
+  ctx.beginPath(); ctx.ellipse(W*0.5, H*0.5, W*0.4, H*0.45, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle = 'rgba(200,80,40,0.06)';
+  ctx.beginPath(); ctx.ellipse(W*0.5, H*0.5, W*0.32, H*0.36, 0, 0, Math.PI*2); ctx.fill();
+  ctx.font = '500 11px sans-serif'; ctx.fillStyle = 'rgba(220,100,60,0.4)';
+  ctx.textAlign = 'center'; ctx.fillText('PROSTATE INFECTION ZONE', W*0.5, H*0.5 - H*0.38);
+  ctx.strokeStyle = 'rgba(22,160,133,0.25)'; ctx.lineWidth = 1.5; ctx.setLineDash([8,6]);
+  ctx.beginPath(); ctx.moveTo(0, H*0.5); ctx.lineTo(W*0.18, H*0.5); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(22,160,133,0.5)'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('BLOOD', 4, H*0.5-4); ctx.fillText('SUPPLY', 4, H*0.5+10);
+}
+
+function spawnWave() {
+  const types = ['efaecalis','efaecalis','efaecalis','ecoli','ecoli','ehormaechei','ehormaechei','ehormaechei'];
+  types.forEach((type, i) => { setTimeout(() => microbes.push(new Microbe(type)), i * 120); });
+}
+
+spawnWave();
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mx = (e.clientX - rect.left) * scaleX;
+  const my = (e.clientY - rect.top) * scaleY;
+  let hit = false;
+  for (const m of microbes) {
+    if (!m.dead && m.contains(mx, my)) { m.hit(); hit = true; break; }
+  }
+  if (!hit) {
+    const nearest = microbes.filter(m=>!m.dead).sort((a,b)=>(a.x-mx)**2+(a.y-my)**2-((b.x-mx)**2+(b.y-my)**2))[0];
+    if (nearest) fosfos.push(new Fosfo(nearest.x+rand(-20,20), nearest.y+rand(-20,20)));
+  }
+});
+
+function loop() {
+  t++;
+  drawBackground();
+  fosfos.forEach(f => { f.update(); f.draw(); });
+  fosfos = fosfos.filter(f => !f.isOut());
+  fosfos.forEach(fosfo => {
+    microbes.forEach(m => {
+      if (!m.dead && m.contains(fosfo.x, fosfo.y)) {
+        m.hit();
+        fosfos = fosfos.filter(f => f !== fosfo);
+        explosions.push({x: fosfo.x, y: fosfo.y, vx:0, vy:-2, life:30, r:10, color:'#16a085'});
+      }
+    });
+  });
+  microbes = microbes.filter(m => !m.dead);
+  microbes.forEach(m => { m.update(); m.draw(); });
+  explosions = explosions.filter(e => e.life > 0);
+  explosions.forEach(e => {
+    e.x+=e.vx; e.y+=e.vy; e.vy+=0.1; e.life--;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r*(e.life/40), 0, Math.PI*2);
+    ctx.fillStyle = e.color; ctx.globalAlpha = e.life/50; ctx.fill(); ctx.globalAlpha = 1;
+  });
+  speechBubbles = speechBubbles.filter(b => b.life > 0);
+  speechBubbles.forEach(b => {
+    b.y -= 0.5; b.life--;
+    ctx.save(); ctx.globalAlpha = b.life/60;
+    ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = b.color; ctx.textAlign = 'center';
+    ctx.fillText(b.text, b.x, b.y); ctx.restore();
+  });
+  if (t % 480 === 0 && microbes.filter(m=>m.type==='efaecalis').length < 6) {
+    microbes.push(new Microbe('efaecalis'));
+    microbes.push(new Microbe('efaecalis'));
+    speechBubbles.push({x:W*0.5, y:H*0.1, text:'REINFORCEMENTS (biofilm respawn)', life:80, color:'#c0392b'});
+  }
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
